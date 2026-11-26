@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GWクイズ デモ</title>
+<style>
+  :root{
+    --bg:#f6f4ef; --card:#ffffff; --ink:#2b2a27; --sub:#77736a;
+    --main:#e8833a; --main-soft:#fbe7d6; --ok:#3f9b6b; --ng:#d4553f; --line:#e3ded4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Hiragino Sans","Noto Sans JP","Yu Gothic",sans-serif;line-height:1.6}
+  .wrap{max-width:520px;margin:0 auto;padding:20px 16px 60px}
+  h1{font-size:18px;margin:0 0 4px}
+  .step{font-size:12px;color:var(--sub);margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:14px}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;margin-bottom:8px}
+  .tag.ai{background:#e6eefc;color:#3a5fb0}
+  .tag.human{background:var(--main-soft);color:#a8541a}
+  label{display:block;font-size:13px;color:var(--sub);margin:12px 0 4px}
+  input[type=text],input[type=number]{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:15px}
+  button{width:100%;padding:12px;border:none;border-radius:10px;font-size:15px;font-weight:bold;
+    background:var(--main);color:#fff;cursor:pointer;margin-top:12px}
+  button.sub{background:#fff;color:var(--ink);border:1px solid var(--line);font-weight:normal}
+  button:disabled{opacity:.4;cursor:default}
+  .screen{display:none}
+  .screen.on{display:block}
+  .minutes{font-size:13px;background:#faf8f4;border-radius:8px;padding:10px;max-height:160px;overflow:auto}
+  .minutes p{margin:0 0 6px}
+  .choice{display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:8px;margin-top:8px;cursor:pointer}
+  .choice.sel{border-color:var(--main);background:var(--main-soft)}
+  .extra{display:flex;gap:8px;margin-top:8px}
+  .extra .choice{flex:1;font-size:13px;justify-content:center}
+  .conf{flex:1;text-align:center;padding:8px 0;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-weight:bold;line-height:1.2}
+  .conf small{font-weight:normal;font-size:10px;color:var(--sub)}
+  .conf.sel{border-color:var(--main);background:var(--main-soft)}
+  .bar{display:flex;align-items:center;gap:8px;font-size:13px;margin-top:8px}
+  .bar .fill{height:14px;background:var(--main);border-radius:4px}
+  .big{font-size:20px;font-weight:bold;text-align:center;margin:6px 0}
+  .ok{color:var(--ok)} .ng{color:var(--ng)}
+  .note{font-size:12px;color:var(--sub)}
+  .wheel-box{position:relative;width:260px;height:260px;margin:10px auto}
+  .pointer{position:absolute;top:-6px;left:50%;transform:translateX(-50%);width:0;height:0;
+    border-left:12px solid transparent;border-right:12px solid transparent;border-top:22px solid var(--ink);z-index:2}
+  .wheel{width:100%;height:100%;border-radius:50%;border:4px solid var(--ink);
+    transition:transform 3s cubic-bezier(.15,.8,.2,1)}
+  .wheel-label{position:absolute;inset:0;pointer-events:none}
+  .wheel-label span{position:absolute;left:50%;top:50%;font-size:13px;font-weight:bold;transform-origin:0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GWクイズ（デモ版）</h1>
+  <div class="step" id="stepLabel"></div>
+
+  <!-- 1. 所要時間を入力 -->
+  <section class="screen on" id="s-start">
+    <div class="card">
+      <span class="tag human">人間がやる</span>
+      <div>話し合いの所要時間を入力</div>
+      <label>テーマ</label>
+      <input type="text" id="theme" value="文化祭の出し物を決める">
+      <label>所要時間（分）</label>
+      <input type="number" id="minutesInput" value="60" min="10" step="10">
+      <button onclick="startMeeting()">話し合いを始める</button>
+    </div>
+  </section>
+
+  <!-- 2. 話し合い中（AIが議事録） -->
+  <section class="screen" id="s-meeting">
+    <div class="card">
+      <span class="tag ai">AIがやる</span>
+      <div id="planText"></div>
+    </div>
+    <div class="card">
+      <span class="tag ai">AIがやる</span>
+      <div>議事録（自動）</div>
+      <div class="minutes" id="minutesLog"></div>
+      <button class="sub" onclick="goQuizTime()">（デモ用）クイズのタイミングまで進める</button>
+    </div>
+  </section>
+
+  <!-- 3. クイズの時間です → フレームに入力 -->
+  <section class="screen" id="s-make">
+    <div class="card">
+      <span class="tag ai">AIがやる</span>
+      <div class="big">💡 クイズの時間です</div>
+      <div class="note">AIからの出題推薦：</div>
+      <div id="recommend"></div>
+    </div>
+    <div class="card">
+      <span class="tag human">人間がやる</span>
+      <div>フレームに入力</div>
+      <button class="sub" onclick="aiAssist()">AIに問題文と選択肢を考えてもらう</button>
+      <div class="note" id="assistNote" style="display:none;margin-top:8px">
+        ✏️ AIの案を入れました。問題文・選択肢・正解は自由に書き換えられます
+      </div>
+      <label>問題文</label>
+      <input type="text" id="qText" placeholder="問題文を入力">
+      <label>選択肢（正解の左の丸にチェック）</label>
+      <div id="optInputs"></div>
+      <button onclick="sendQuiz()">この内容で全員に出題する</button>
+    </div>
+  </section>
+
+  <!-- 4. 回答＆自信度 -->
+  <section class="screen" id="s-answer">
+    <div class="card">
+      <span class="tag human">人間がやる（別の人）</span>
+      <div class="note">回答は匿名で集計されます</div>
+      <div class="big" id="aText" style="font-size:16px;text-align:left"></div>
+      <div id="aChoices"></div>
+      <div class="extra">
+        <div class="choice" data-v="notyet" onclick="pick(this)">まだ理解できていない</div>
+        <div class="choice" data-v="odd" onclick="pick(this)">少し違和感がある</div>
+      </div>
+      <label>自分の回答の自信度を選んでください</label>
+      <div class="extra" id="confChoices">
+        <div class="conf" data-c="1" onclick="pickConf(this)">1<br><small>自信なし</small></div>
+        <div class="conf" data-c="2" onclick="pickConf(this)">2</div>
+        <div class="conf" data-c="3" onclick="pickConf(this)">3</div>
+        <div class="conf" data-c="4" onclick="pickConf(this)">4</div>
+        <div class="conf" data-c="5" onclick="pickConf(this)">5<br><small>自信あり</small></div>
+      </div>
+      <div class="note" style="margin-top:6px">🔒 自信度はほかの人には表示されません</div>
+      <button id="answerBtn" onclick="submitAnswer()" disabled>回答する</button>
+    </div>
+  </section>
+
+  <!-- 5. 結果 -->
+  <section class="screen" id="s-result">
+    <div class="card">
+      <span class="tag ai">AIがやる</span>
+      <div>みんなの回答（匿名）</div>
+      <div id="dist"></div>
+      <div class="big" id="verdict"></div>
+      <button id="toRoulette" onclick="goRoulette()">ルーレットスタート！</button>
+      <button id="backMeeting" class="sub" onclick="backToMeeting()">話し合いに戻る</button>
+    </div>
+  </section>
+
+  <!-- 6. ルーレット -->
+  <section class="screen" id="s-roulette">
+    <div class="card">
+      <span class="tag ai">AIがやる</span>
+      <div>だれが代わりに説明する？ルーレット</div>
+      <div class="wheel-box">
+        <div class="pointer"></div>
+        <div class="wheel" id="wheel"></div>
+        <div class="wheel-label" id="wheelLabel"></div>
+      </div>
+      <button id="spinBtn" onclick="spin()">回す</button>
+      <div class="big" id="hit"></div>
+    </div>
+    <div class="card" id="explainCard" style="display:none">
+      <span class="tag human">人間がやる</span>
+      <div><b id="hitName"></b>が代わりに説明する</div>
+      <button onclick="backToMeeting()">わかった！話し合いに戻る</button>
+      <button class="sub" onclick="goAiExplain()">それでも分からないよ！</button>
+    </div>
+  </section>
+
+  <!-- 7. AIからみた説明 -->
+  <section class="screen" id="s-ai">
+    <div class="card">
+      <span class="tag ai">AIがやる</span>
+      <div>AIからみた説明（自分だけに表示）</div>
+      <p id="aiExplain"></p>
+      <button onclick="backToMeeting()">話し合いに戻る</button>
+    </div>
+  </section>
+</div>
+
+<script>
+// ===== デモ用のデータ（あとで本物の議事録やAIの出力に差し替える） =====
+const MEMBERS = ["Aさん","Bさん","Cさん","Dさん","あなた"];
+const LOG = [
+  "Aさん：お化け屋敷かカフェで迷ってる",
+  "Bさん：カフェは衛生の申請が大変らしい",
+  "Cさん：お化け屋敷なら教室の飾りつけで済む",
+  "Aさん：じゃあお化け屋敷に寄せようか",
+  "Dさん：予算は1人500円くらい？",
+  "Aさん：お化け屋敷で決定。次は役割分担"
+];
+const SAMPLE_QUIZ = {
+  q: "さっきの話し合いで決まった出し物はどれ？",
+  opts: ["カフェ", "お化け屋敷", "まだ決まっていない"],
+  correct: 1,
+  recommend: "「出し物がお化け屋敷に決まった」ところで話の方向が変わりました。この内容で出題しませんか？",
+  explain: "カフェは衛生の申請が大変なので見送り、教室の飾りつけで済むお化け屋敷に決まりました。次は役割分担を決める段階です。"
+};
+
+let quiz = null, myAnswer = null, myConf = null, answers = [], timer = null, logIdx = 0;
+
+const STEPS = {
+  "s-start":"1. 所要時間を入力","s-meeting":"2. 話し合い中","s-make":"3. クイズの時間",
+  "s-answer":"4. 回答＆自信度","s-result":"5. 結果","s-roulette":"6. ルーレット","s-ai":"7. AIからみた説明"
+};
+function show(id){
+  document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on"));
+  document.getElementById(id).classList.add("on");
+  document.getElementById("stepLabel").textContent = STEPS[id];
+  window.scrollTo(0,0);
+}
+show("s-start");
+
+// 1→2：所要時間からクイズの回数・タイミングを決める（仮ルール：20分ごとに1回）
+function startMeeting(){
+  const min = Math.max(10, Number(document.getElementById("minutesInput").value) || 60);
+  const count = Math.max(1, Math.floor(min / 20));
+  const every = Math.round(min / (count + 1));
+  document.getElementById("planText").innerHTML =
+    `所要時間 ${min}分 → クイズは <b>${count}回</b>、約<b>${every}分ごと</b>に出します`;
+  document.getElementById("minutesLog").innerHTML = "";
+  logIdx = 0;
+  show("s-meeting");
+  clearInterval(timer);
+  timer = setInterval(()=>{
+    if(logIdx >= LOG.length){ clearInterval(timer); return; }
+    const p = document.createElement("p"); p.textContent = LOG[logIdx++];
+    const box = document.getElementById("minutesLog"); box.appendChild(p); box.scrollTop = box.scrollHeight;
+  }, 900);
+}
+
+// 2→3：クイズの時間です＋出題推薦
+function goQuizTime(){
+  clearInterval(timer);
+  document.getElementById("recommend").textContent = SAMPLE_QUIZ.recommend;
+  document.getElementById("qText").value = "";
+  const box = document.getElementById("optInputs"); box.innerHTML = "";
+  for(let i=0;i<3;i++){
+    box.insertAdjacentHTML("beforeend",
+      `<div class="bar"><input type="radio" name="correct" value="${i}"><input type="text" id="opt${i}" placeholder="選択肢${i+1}"></div>`);
+  }
+  show("s-make");
+}
+function aiAssist(){
+  document.getElementById("qText").value = SAMPLE_QUIZ.q;
+  SAMPLE_QUIZ.opts.forEach((o,i)=> document.getElementById("opt"+i).value = o);
+  document.querySelector(`input[name=correct][value="${SAMPLE_QUIZ.correct}"]`).checked = true;
+  document.getElementById("assistNote").style.display = "block";
+}
+function sendQuiz(){
+  const c = document.querySelector("input[name=correct]:checked");
+  const opts = [0,1,2].map(i=>document.getElementById("opt"+i).value.trim());
+  const q = document.getElementById("qText").value.trim();
+  if(!q || opts.some(o=>!o) || !c){ alert("問題文・選択肢・正解を入力してね"); return; }
+  quiz = { q, opts, correct: Number(c.value) };
+  myAnswer = null;
+  document.getElementById("aText").textContent = q;
+  document.getElementById("aChoices").innerHTML =
+    opts.map((o,i)=>`<div class="choice" data-v="${i}" onclick="pick(this)">${o}</div>`).join("");
+  document.querySelectorAll("#s-answer .choice, #s-answer .conf").forEach(e=>e.classList.remove("sel"));
+  myConf = null;
+  updateAnswerBtn();
+  show("s-answer");
+}
+
+// 4：回答＆自信度（両方選ぶと回答できる）
+function pick(el){
+  document.querySelectorAll("#s-answer .choice").forEach(e=>e.classList.remove("sel"));
+  el.classList.add("sel"); myAnswer = el.dataset.v;
+  updateAnswerBtn();
+}
+function pickConf(el){
+  document.querySelectorAll("#s-answer .conf").forEach(e=>e.classList.remove("sel"));
+  el.classList.add("sel"); myConf = Number(el.dataset.c);
+  updateAnswerBtn();
+}
+function updateAnswerBtn(){
+  document.getElementById("answerBtn").disabled = !(myAnswer !== null && myConf !== null);
+}
+function submitAnswer(){
+  const conf = myConf;
+  // ほかのメンバーの回答はデモ用に自動で作る（ズレが出るようにしてある）
+  answers = [
+    { name:"Aさん", v:String(quiz.correct), conf:5 },
+    { name:"Bさん", v:String(quiz.correct), conf:4 },
+    { name:"Cさん", v:String((quiz.correct+1)%3), conf:2 },
+    { name:"Dさん", v:"notyet", conf:1 },
+    { name:"あなた", v:myAnswer, conf }
+  ];
+  showResult();
+}
+
+// 5：結果（匿名で集計）
+function showResult(){
+  const labels = [...quiz.opts, "まだ理解できていない", "少し違和感がある"];
+  const keys = ["0","1","2","notyet","odd"];
+  const counts = keys.map(k=>answers.filter(a=>a.v===k).length);
+  document.getElementById("dist").innerHTML = keys.map((k,i)=>`
+    <div class="bar"><div style="width:130px">${labels[i]}${String(quiz.correct)===k?" ✓":""}</div>
+    <div class="fill" style="width:${counts[i]*36}px"></div><div>${counts[i]}人</div></div>`).join("");
+  const allOk = answers.every(a=>a.v===String(quiz.correct));
+  const v = document.getElementById("verdict");
+  v.textContent = allOk ? "みんなの理解がそろいました！" : "理解がズレています";
+  v.className = "big " + (allOk ? "ok" : "ng");
+  document.getElementById("toRoulette").style.display = allOk ? "none" : "block";
+  document.getElementById("backMeeting").style.display = allOk ? "block" : "none";
+  show("s-result");
+}
+
+// 6：ルーレット
+// 見た目は全員同じ大きさ。でも裏では「自信がある人」（自信度4以上）だけが当たる（自信度は画面に出さない）
+let segs = [];
+function goRoulette(){
+  const size = 360 / answers.length;
+  const colors = ["#f6c38f","#9fc9e8","#b8dfb0","#f2a8a0","#d8c4ef"];
+  segs = answers.map((a,i)=>({name:a.name, conf:a.conf, start:i*size, end:(i+1)*size, color:colors[i%5]}));
+  const wheel = document.getElementById("wheel");
+  wheel.style.transition = "none"; wheel.style.transform = "rotate(0deg)";
+  wheel.style.background = `conic-gradient(${segs.map(s=>`${s.color} ${s.start}deg ${s.end}deg`).join(",")})`;
+  document.getElementById("wheelLabel").innerHTML = segs.map(s=>{
+    const mid = (s.start+s.end)/2 - 90;
+    return `<span style="transform:rotate(${mid}deg) translate(55px,-8px)">${s.name}</span>`;
+  }).join("");
+  document.getElementById("hit").textContent = "";
+  document.getElementById("explainCard").style.display = "none";
+  document.getElementById("spinBtn").disabled = false;
+  show("s-roulette");
+}
+function spin(){
+  document.getElementById("spinBtn").disabled = true;
+  // 自信度4以上の人の中から選ぶ（いなければ、いちばん自信度が高い人の中から選ぶ）
+  let pool = segs.filter(s=>s.conf>=4);
+  if(pool.length===0){ const max = Math.max(...segs.map(s=>s.conf)); pool = segs.filter(s=>s.conf===max); }
+  const hit = pool[Math.floor(Math.random()*pool.length)];
+  // 当たった人の枠の中のどこかで止まるように回す
+  const r = hit.start + (hit.end-hit.start)*(0.15 + Math.random()*0.7);
+  const wheel = document.getElementById("wheel");
+  const label = document.getElementById("wheelLabel");
+  const deg = 360*5 + (360 - r);
+  wheel.style.transition = "transform 3s cubic-bezier(.15,.8,.2,1)";
+  label.style.transition = wheel.style.transition;
+  requestAnimationFrame(()=>{ wheel.style.transform = `rotate(${deg}deg)`; label.style.transform = `rotate(${deg}deg)`; });
+  setTimeout(()=>{
+    document.getElementById("hit").textContent = `🎯 ${hit.name} が当たり！`;
+    document.getElementById("hitName").textContent = hit.name;
+    document.getElementById("explainCard").style.display = "block";
+  }, 3100);
+}
+
+// 7：それでも分からないときはAIからみた説明
+function goAiExplain(){
+  document.getElementById("aiExplain").textContent = SAMPLE_QUIZ.explain;
+  show("s-ai");
+}
+function backToMeeting(){
+  document.getElementById("wheelLabel").style.transform = "none";
+  show("s-meeting");
+}
+</script>
+</body>
+</html>
