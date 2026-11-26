@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>AI議事録</title>
+</head>
+<body>
+  <h1>AI議事録</h1>
+  <!-- ここにルームコードを表示する場所を作る -->
+  <p>ルームコード: <span id="room-display"></span></p>
+
+  <!-- ▼▼▼ ここから下にJavaScriptを書く ▼▼▼ -->
+  <script>
+    // URLの「?room=XXXX」を読み取る
+    const params = new URLSearchParams(window.location.search);
+    let roomId = params.get("room");
+
+    // テスト用に直接開いた場合は、ランダムな4桁を自動発行する
+    if (!roomId) {
+      roomId = Math.floor(1000 + Math.random() * 9000).toString();
+    }
+
+    // 画面に表示する
+    document.getElementById("room-display").textContent = roomId;
+    console.log("現在のルームコード:", roomId);
+  </script>
+  <!-- ▲▲▲ ここまで ▲▲▲ -->
+</body>
+</html>
