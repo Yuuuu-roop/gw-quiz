@@ -6,24 +6,77 @@
 </head>
 <body>
   <h1>AI議事録</h1>
-  <!-- ここにルームコードを表示する場所を作る -->
   <p>ルームコード: <span id="room-display"></span></p>
 
-  <!-- ▼▼▼ ここから下にJavaScriptを書く ▼▼▼ -->
+  <!-- 録音ボタンと状態表示 -->
+  <button id="start-btn">録音開始</button>
+  <button id="stop-btn" disabled>停止</button>
+  <p id="status">待機中</p>
+
+  <!-- 文字起こし結果が入る場所（手動で修正もできる） -->
+  <textarea id="transcript" rows="12" cols="50" placeholder="ここに話し合いの内容が文字起こしされます..."></textarea>
+
   <script>
-    // URLの「?room=XXXX」を読み取る
+    // 1. ルームコードの取得
     const params = new URLSearchParams(window.location.search);
     let roomId = params.get("room");
-
-    // テスト用に直接開いた場合は、ランダムな4桁を自動発行する
     if (!roomId) {
       roomId = Math.floor(1000 + Math.random() * 9000).toString();
     }
-
-    // 画面に表示する
     document.getElementById("room-display").textContent = roomId;
-    console.log("現在のルームコード:", roomId);
+
+    // 2. 音声認識（Web Speech API）の準備
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const startBtn = document.getElementById("start-btn");
+    const stopBtn = document.getElementById("stop-btn");
+    const statusText = document.getElementById("status");
+    const transcriptArea = document.getElementById("transcript");
+
+    if (!SpeechRecognition) {
+      statusText.textContent = "このブラウザは音声認識に対応していません（ChromeかEdgeを使ってください）";
+      startBtn.disabled = true;
+    } else {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "ja-JP";
+      recognition.continuous = true;      // 連続して認識する
+      recognition.interimResults = false; // 確定した文章だけを追加する
+
+      let isRecording = false;
+
+      // 音声が文字になったときの処理
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            transcriptArea.value += event.results[i][0].transcript + "\n";
+          }
+        }
+      };
+
+      // 無音が続いて勝手に止まったときに自動再開する処理
+      recognition.onend = () => {
+        if (isRecording) {
+          recognition.start();
+        }
+      };
+
+      // 録音開始ボタン
+      startBtn.onclick = () => {
+        isRecording = true;
+        recognition.start();
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        statusText.textContent = "録音中... 話しかけてみてください";
+      };
+
+      // 停止ボタン
+      stopBtn.onclick = () => {
+        isRecording = false;
+        recognition.stop();
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        statusText.textContent = "停止しました";
+      };
+    }
   </script>
-  <!-- ▲▲▲ ここまで ▲▲▲ -->
 </body>
 </html>
