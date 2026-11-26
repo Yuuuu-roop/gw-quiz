@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>トークイズ</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <style>
+    /* ===== 見た目：りさちゃん・りこちゃんのデザイン ===== */
+    :root { --ink:#3e285c; --ink-soft:#6c568c; --border-plum:#6c4d96; }
+    body {
+      font-family: 'M PLUS Rounded 1c', 'Inter', sans-serif;
+      color: var(--ink);
+      background-color: #f8f4ff;
+      background-image:
+        linear-gradient(to right, rgba(155,126,212,0.13) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(155,126,212,0.13) 1px, transparent 1px);
+      background-size: 18px 18px;
+    }
+    .retro-window { border:2px solid var(--border-plum); box-shadow:0 4px 0 rgba(108,77,150,0.18); background:rgba(255,255,255,0.94); }
+    .retro-pill-btn { background:linear-gradient(180deg,#c29dff 0%,#9b6ee8 100%); border:2px solid #5a3a8a; box-shadow:0 3px 0 #5a3a8a; color:#fff; transition:transform .1s ease, box-shadow .1s ease; }
+    .retro-pill-btn:active { transform:translateY(2px); box-shadow:0 1px 0 #5a3a8a; }
+    .retro-pill-btn:disabled { opacity:.45; cursor:not-allowed; }
+    .retro-outline-btn { background:#fff; border:2px solid #5a3a8a; box-shadow:0 2px 0 rgba(90,58,138,0.22); color:var(--ink); }
+    .wheel-transition { transition: transform 3.2s cubic-bezier(0.15,0.85,0.2,1); }
+    @keyframes float-cat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
+    .animate-float-cat { animation: float-cat 2.8s ease-in-out infinite; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <main class="w-full max-w-[440px] mx-auto min-h-screen flex flex-col relative">
+    <div id="screenContainer" class="flex-1 relative flex flex-col"></div>
+
+    <!-- 議論画面用 下部フッター -->
+    <footer id="bottomNav" class="hidden sticky bottom-0 bg-white/95 backdrop-blur border-t-2 border-[#b79ee0] px-3 py-2 grid grid-cols-3 gap-2">
+      <button type="button" data-nav="minutes" class="bottom-tab flex flex-col items-center justify-center py-1.5 rounded-2xl text-xs font-bold"><span class="text-base leading-none mb-1">📝</span><span>議事録</span></button>
+      <button type="button" data-nav="quiz" class="bottom-tab flex flex-col items-center justify-center py-1.5 rounded-2xl text-xs font-bold"><span class="text-base leading-none mb-1">❓</span><span>クイズ</span></button>
+      <button type="button" data-nav="members" class="bottom-tab flex flex-col items-center justify-center py-1.5 rounded-2xl text-xs font-bold"><span class="text-base leading-none mb-1">🐾</span><span>メンバー</span></button>
+    </footer>
+  </main>
+
+  <script>
+    // =========================================================
+    // デモ用のデータ（あとでFirebase・Geminiの本物に置き換える）
+    // =========================================================
+    const DEMO_OTHERS = ['Aさん', 'Bさん', 'Cさん', 'Dさん'];   // 自分以外にルームに入ってくる人（デモ）
+    const DEMO_LOG = [
+      'お化け屋敷かカフェで迷ってる',
+      'カフェは衛生の申請が大変らしい',
+      'お化け屋敷なら教室の飾りつけで済む',
+      'じゃあお化け屋敷に寄せようか',
+      '予算は1人500円くらい？',
+      'お化け屋敷で決定。次は役割分担'
+    ];
+    const AI_QUIZ = {
+      recommend: '「出し物がお化け屋敷に決まった」ところで話の方向が変わりました。この内容で出題しませんか？',
+      q: 'さっきの話し合いで決まった出し物はどれ？',
+      opts: ['カフェ', 'お化け屋敷', 'まだ決まっていない'],
+      correct: 1,
+      explain: 'カフェは衛生の申請が大変なので見送り、教室の飾りつけで済むお化け屋敷に決まりました。次は役割分担を決める段階です。'
+    };
+
+    // =========================================================
+    // アプリの状態（画面に出す情報はぜんぶここにまとめる）
+    // =========================================================
+    const state = {
+      screen: 'home',          // home / create / join / lobby / discussion / notice / make / quiz / result / roulette / ai
+      myName: '',
+      isHost: false,
+      roomCode: '',
+      theme: '',
+      duration: 60,
+      members: [],
+      quizTimes: [],           // クイズを出す時間（分）
+      quizIndex: 0,            // 何回目のクイズか
+      elapsed: 0,              // 話し合いの経過時間（分）※デモでは手動で進める
+      minutes: [],             // 議事録
+      newMemo: '',
+      discussionTab: 'minutes',
+      draft: { q: '', opts: ['', '', ''], correct: null },
+      assisted: false,
+      quiz: null,              // 出題中のクイズ
+      myAnswer: null,
+      myConf: null,
+      answers: [],
+      rouletteRotation: 0,
+      rouletteSpinning: false,
+      rouletteDone: false,
+      winner: '',
+      joinCode: '',
+      toast: ''
+    };
+    let logTimer = null, toastTimer = null, spinTimer = null;
+
+    // =========================================================
+    // 共通パーツ（イラスト・ウィンドウ枠）
+    // =========================================================
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    const cloudSvg = (w = 34) => `
+      <svg width="${w}" viewBox="0 0 48 28" fill="none" class="inline-block shrink-0"><path d="M12 24H37C41.4 24 45 20.6 45 16.5C45 12.6 41.8 9.5 37.8 9.1C36.3 4.9 32.2 2 27.5 2C21.8 2 17.1 6.2 16.5 11.7C15.7 11.4 14.8 11.2 13.8 11.2C9.5 11.2 6 14.5 6 18.6C6 21.8 8.7 24 12 24Z" fill="#FFFFFF" stroke="#6C4D96" stroke-width="2.4" stroke-linejoin="round"/></svg>`;
+
+    const windowButtons = () => `
+      <div class="flex items-center gap-1">
+        <span class="w-4 h-4 rounded-[3px] border border-[#6c4d96] bg-white text-[#6c4d96] text-[10px] font-bold flex items-center justify-center leading-none">−</span>
+        <span class="w-4 h-4 rounded-[3px] border border-[#6c4d96] bg-white text-[#6c4d96] text-[9px] font-bold flex items-center justify-center leading-none">□</span>
+        <span class="w-4 h-4 rounded-[3px] border border-[#6c4d96] bg-white text-[#6c4d96] text-[10px] font-bold flex items-center justify-center leading-none">×</span>
+      </div>`;
+
+    const windowBox = (title, body, barColor = '#efe6ff') => `
+      <div class="retro-window rounded-2xl overflow-hidden">
+        <div class="border-b-2 border-[#6c4d96] px-3 py-1.5 flex items-center justify-between" style="background:${barColor}">
+          <span class="text-[11px] font-extrabold text-[#4b3170]">${title}</span>${windowButtons()}
+        </div>
+        <div class="p-3.5">${body}</div>
+      </div>`;
+
+    const tag = who => who === 'ai'
+      ? '<span class="inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#eee3fb] text-[#75549b] border border-[#d1b8eb]">AIがやる</span>'
+      : '<span class="inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#fdeaf5] text-[#9b5c91] border border-[#efc9e2]">人間がやる</span>';
+
+    const loungingCatSvg = (w = 84) => `
+      <svg width="${w}" viewBox="0 0 110 64" fill="none" class="shrink-0">
+        <path d="M16 20L10 16M14 27L7 27M18 33L13 37" stroke="#6C4D96" stroke-width="2" stroke-linecap="round"/>
+        <path d="M28 48C23 48 20 43 22 37C23 32 25 22 27 16L34 22C38 20 44 20 48 22L54 15C57 20 59 25 60 28C67 27 77 28 84 34C90 39 91 48 84 52H34C30 52 29 50 28 48Z" fill="#FFFFFF" stroke="#6C4D96" stroke-width="2.4" stroke-linejoin="round"/>
+        <ellipse cx="70" cy="36" rx="7" ry="4.5" fill="#F8D2EC"/><path d="M51 19L54 16L56 22Z" fill="#FFD1E6"/>
+        <circle cx="36" cy="31" r="1.9" fill="#3E285C"/><circle cx="47" cy="31" r="1.9" fill="#3E285C"/>
+        <path d="M40 34.5C41 35.8 42.5 35.8 43.5 34.5" stroke="#3E285C" stroke-width="1.8" stroke-linecap="round"/>
+        <ellipse cx="32.5" cy="34" rx="2.6" ry="1.5" fill="#FFC0DC"/><ellipse cx="50.5" cy="34" rx="2.6" ry="1.5" fill="#FFC0DC"/>
+        <ellipse cx="32" cy="51" rx="5" ry="3" fill="#FFFFFF" stroke="#6C4D96" stroke-width="2"/><ellipse cx="46" cy="51" rx="5" ry="3" fill="#FFFFFF" stroke="#6C4D96" stroke-width="2"/>
+        <path d="M86 47C94 47 101 41 99 34C98 30 93 30 92 34C91 37 94 40 88 43" fill="#FFFFFF" stroke="#6C4D96" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>`;
+
+    const jumpingRibbonCatSvg = (w = 88) => `
+      <svg width="${w}" viewBox="0 0 116 74" fill="none" class="shrink-0">
+        <path d="M10 58C6 58 4 54 6 51C7 48 11 47 13 49C15 46 20 47 21 51C24 51 25 55 22 58H10Z" fill="#FFFFFF" stroke="#9B7AD0" stroke-width="1.8"/>
+        <path d="M40 16L36 10M46 14L45 7M52 15L55 9" stroke="#F6B8D0" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M35 44C25 42 18 46 15 51" stroke="#6C4D96" stroke-width="6" stroke-linecap="round"/><path d="M35 44C25 42 18 46 15 51" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+        <path d="M34 44C38 35 50 28 63 29C67 22 72 16 76 14L80 20C83 19 87 19 90 21L95 15C97 19 98 25 97 29C100 33 99 39 94 42C89 44 82 43 78 40C72 44 64 49 54 50C44 51 36 48 34 44Z" fill="#FFFFFF" stroke="#6C4D96" stroke-width="2.4" stroke-linejoin="round"/>
+        <path d="M91 39L103 44" stroke="#6C4D96" stroke-width="6.5" stroke-linecap="round"/><path d="M91 39L103 44" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round"/>
+        <path d="M62 29L55 23L58 31Z" fill="#FF9EC7" stroke="#6C4D96" stroke-width="1.6" stroke-linejoin="round"/><path d="M62 29L69 24L66 32Z" fill="#FF9EC7" stroke="#6C4D96" stroke-width="1.6" stroke-linejoin="round"/>
+        <circle cx="62" cy="29" r="2.5" fill="#FF73B0" stroke="#6C4D96" stroke-width="1.4"/>
+        <path d="M77 28C78.5 26.5 80.5 26.5 82 28" stroke="#3E285C" stroke-width="1.8" stroke-linecap="round"/><path d="M87 28C88.5 26.5 90.5 26.5 92 28" stroke="#3E285C" stroke-width="1.8" stroke-linecap="round"/>
+        <ellipse cx="76" cy="31.5" rx="2.2" ry="1.3" fill="#FFC0DC"/><ellipse cx="93" cy="31.5" rx="2.2" ry="1.3" fill="#FFC0DC"/>
+        <path d="M83 32C84 33 85.5 33 86.5 32" stroke="#3E285C" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>`;
+
+    const tinyMouseSvg = (w = 42) => `
+      <svg width="${w}" viewBox="0 0 54 38" fill="none" class="shrink-0">
+        <path d="M40 26C46 27 50 24 49 20" stroke="#6C4D96" stroke-width="2" stroke-linecap="round"/>
+        <ellipse cx="26" cy="24" rx="13" ry="9" fill="#EFE7FF" stroke="#6C4D96" stroke-width="2.2"/>
+        <circle cx="22" cy="14" r="4.5" fill="#FFD8EA" stroke="#6C4D96" stroke-width="2"/><circle cx="30" cy="14" r="4.5" fill="#FFD8EA" stroke="#6C4D96" stroke-width="2"/>
+        <circle cx="18" cy="23" r="1.4" fill="#3E285C"/><circle cx="13" cy="25" r="1.6" fill="#FF8EB8"/>
+      </svg>`;
+
+    const faceCatSvg = (w = 64, mood = 'happy') => `
+      <svg width="${w}" viewBox="0 0 72 64" fill="none" class="shrink-0">
+        <path d="M14 34C14 23 19 13 22 10L29 18C33 16.5 39 16.5 43 18L50 10C53 13 58 23 58 34C58 46 49 54 36 54C23 54 14 46 14 34Z" fill="#FFFFFF" stroke="#6C4D96" stroke-width="2.5" stroke-linejoin="round"/>
+        <path d="M21 14L26 19L19 23Z" fill="#FFD1E6"/><path d="M51 14L46 19L53 23Z" fill="#FFD1E6"/>
+        ${mood === 'think'
+          ? '<circle cx="28" cy="34" r="2.2" fill="#3E285C"/><circle cx="44" cy="34" r="2.2" fill="#3E285C"/><circle cx="36" cy="40" r="2" fill="#FF9EC7"/>'
+          : '<path d="M24 34C26 31.5 29 31.5 31 34" stroke="#3E285C" stroke-width="2.2" stroke-linecap="round"/><path d="M41 34C43 31.5 46 31.5 48 34" stroke="#3E285C" stroke-width="2.2" stroke-linecap="round"/><path d="M32 39C34 41.5 38 41.5 40 39" stroke="#3E285C" stroke-width="2" stroke-linecap="round"/>'}
+        <ellipse cx="22" cy="38" rx="3.2" ry="1.8" fill="#FFC0DC"/><ellipse cx="50" cy="38" rx="3.2" ry="1.8" fill="#FFC0DC"/>
+      </svg>`;
+
+    const brandBar = () => `
+      <div class="flex items-center justify-between mb-3 px-1">
+        <div class="flex items-center gap-2">${cloudSvg(32)}<span class="text-lg font-extrabold tracking-tight">トークイズ</span></div>
+        ${state.roomCode ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-white border border-[#b79ee0] text-[#5a3a8a]">ルーム ${esc(state.roomCode)}</span>` : '<span class="text-xs font-bold text-[#8b6bb8]">✦ ✦</span>'}
+      </div>`;
+
+    // =========================================================
+    // 班で決めたルール：クイズのタイミング
+    // 30分未満 → 最後に1回 ／ 30分以上 → 15分に1回（最後の時間も含む）
+    // =========================================================
+    function makeQuizTimes(min) {
+      if (min < 30) return [min];
+      const times = [];
+      for (let t = 15; t <= min; t += 15) times.push(t);
+      if (times[times.length - 1] !== min) times.push(min);
+      return times;
+    }
+
+    // =========================================================
+    // ① ホーム（ルームをつくる／ルームに入る）
+    // =========================================================
+    function renderHome() {
+      return `
+        <div class="p-4 flex-1 flex flex-col">
+          ${brandBar()}
+          ${windowBox('🐾 トークイズをはじめる', `
+            <h2 class="text-base font-extrabold leading-tight">話し合いをもっと楽しく、深く。</h2>
+            <p class="text-[11px] text-[#6c568c] mt-0.5 mb-3">班のルームをつくるか、もらったコードで入ってね</p>
+            <button type="button" onclick="goTo('create')" class="retro-pill-btn w-full py-3 rounded-full font-extrabold text-sm mb-2.5">＋ ルームをつくる</button>
+            <button type="button" onclick="goTo('join')" class="retro-outline-btn w-full py-3 rounded-full font-extrabold text-sm">🔑 ルームに入る</button>
+          `)}
+          <div class="mt-auto pt-4 flex justify-end animate-float-cat">${loungingCatSvg(110)}</div>
+        </div>`;
+    }
+
+    function renderCreate() {
+      return `
+        <div class="p-4 flex-1 flex flex-col">
+          ${brandBar()}
+          ${windowBox('🐾 ルームをつくる', `
+            <label class="block text-[11px] font-bold text-[#6c568c] mb-1">あなたの名前</label>
+            <input type="text" value="${esc(state.myName)}" oninput="state.myName=this.value" placeholder="例：ゆりあ"
+              class="w-full px-3 py-2 rounded-xl border-2 border-[#c8b6e6] text-sm bg-white focus:outline-none focus:border-[#6c4d96] mb-3" />
+            <label class="block text-[11px] font-bold text-[#6c568c] mb-1">話し合いのテーマ</label>
+            <input type="text" value="${esc(state.theme)}" oninput="state.theme=this.value" placeholder="例：文化祭の出し物を決める"
+              class="w-full px-3 py-2 rounded-xl border-2 border-[#c8b6e6] text-sm bg-white focus:outline-none focus:border-[#6c4d96] mb-3" />
+            <div class="flex items-center justify-between mb-1">${tag('human')}<span class="text-[10px] text-[#7c669e]">所要時間を入力</span></div>
+            <div class="grid grid-cols-3 gap-2 mb-2">
+              ${[30, 60, 90].map(m => `
+                <button type="button" onclick="setDuration(${m})" class="py-1.5 rounded-xl text-xs font-bold border-2 ${state.duration === m ? 'bg-[#efe6ff] text-[#4b3170] border-[#6c4d96]' : 'bg-white text-[#7c669e] border-[#dcd0f2]'}">${m}分</button>`).join('')}
+            </div>
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-[11px] text-[#6c568c]">それ以外：</span>
+              <input id="durationInput" type="number" min="5" step="5" value="${state.duration}" onchange="setDuration(Number(this.value))"
+                class="w-20 px-2 py-1 rounded-lg border-2 border-[#c8b6e6] text-sm bg-white focus:outline-none" /><span class="text-[11px]">分</span>
+            </div>
+            <p class="text-[11px] text-[#6c568c] mb-3">${tag('ai')} クイズは <b>${makeQuizTimes(state.duration).length}回</b>（${makeQuizTimes(state.duration).map(t => t + '分').join('・')}）</p>
+            <button type="button" onclick="createRoom()" class="retro-pill-btn w-full py-2.5 rounded-full font-extrabold text-sm">ルームをつくる ›</button>
+          `)}
+          <button type="button" onclick="goTo('home')" class="mt-3 text-xs font-bold text-[#6c568c] underline">← もどる</button>
+        </div>`;
+    }
+
+    function renderJoin() {
+      return `
+        <div class="p-4 flex-1 flex flex-col">
+          ${brandBar()}
+          ${windowBox('🔑 ルームに入る', `
+            <label class="block text-[11px] font-bold text-[#6c568c] mb-1">ルームコード</label>
+            <input type="text" value="${esc(state.joinCode)}" oninput="state.joinCode=this.value.toUpperCase()" placeholder="例：K7Q2X"
+              class="w-full px-3 py-2 rounded-xl border-2 border-[#b79ee0] text-center font-mono font-bold tracking-widest text-sm bg-[#faf7ff] focus:outline-none focus:border-[#6c4d96] mb-3" />
+            <label class="block text-[11px] font-bold text-[#6c568c] mb-1">あなたの名前</label>
+            <input type="text" value="${esc(state.myName)}" oninput="state.myName=this.value" placeholder="例：りさ"
+              class="w-full px-3 py-2 rounded-xl border-2 border-[#c8b6e6] text-sm bg-white focus:outline-none focus:border-[#6c4d96] mb-3" />
+            <button type="button" onclick="joinRoom()" class="retro-pill-btn w-full py-2.5 rounded-full font-extrabold text-sm">入室する ›</button>
+            <p class="text-[10px] text-[#7c669e] mt-2">※デモ版では、どんなコードでも入れます（Firebaseにつなぐと、同じコードの人だけが同じルームに入ります）</p>
+          `)}
+          <button type="button" onclick="goTo('home')" class="mt-3 text-xs font-bold text-[#6c568c] underline">← もどる</button>
+        </div>`;
+    }
+
+    // 待機画面（ルームのメンバー一覧）
+    function renderLobby() {
+      return `
+        <div class="p-4 flex-1 flex flex-col gap-3">
+          ${brandBar()}
+          ${windowBox('🐾 ルームの準備', `
+            <p class="text-[11px] text-[#6c568c] mb-1">このコードを班のみんなに送ってね</p>
+            <div class="text-center font-mono font-extrabold text-3xl tracking-[0.3em] py-2 rounded-xl bg-[#faf7ff] border-2 border-dashed border-[#b79ee0] mb-3">${esc(state.roomCode)}</div>
+            <p class="text-xs font-bold mb-0.5">テーマ：${esc(state.theme || '（未設定）')}</p>
+            <p class="text-[11px] text-[#6c568c]">所要時間 ${state.duration}分 ／ クイズ ${state.quizTimes.length}回</p>
+          `)}
+          ${windowBox(`🐾 今入っているメンバー（${state.members.length}人）`, `
+            <ul class="space-y-1.5">
+              ${state.members.map(m => `
+                <li class="flex items-center justify-between px-3 py-2 rounded-xl bg-[#f7f2ff] border border-[#dfd2f5] text-xs font-bold">
+                  <span>🐾 ${esc(m)}${m === state.myName ? '（あなた）' : ''}</span>
+                  <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">入室済み</span>
+                </li>`).join('')}
+            </ul>
+          `)}
+          ${state.isHost
+            ? `<button type="button" onclick="startDiscussion()" class="retro-pill-btn w-full py-3 rounded-full font-extrabold text-sm">🐾 話し合いを始める ›</button>`
+            : `<p class="text-center text-xs font-bold text-[#6c568c]">ルームをつくった人が始めるまで待っててね</p>
+               <button type="button" onclick="startDiscussion()" class="retro-outline-btn w-full py-2 rounded-full font-bold text-xs">（デモ用）始まったことにする</button>`}
+          <div class="mt-auto flex justify-end animate-float-cat">${loungingCatSvg(90)}</div>
+        </div>`;
+    }
+
+    // =========================================================
+    // ② 話し合い中
+    // =========================================================
+    function renderDiscussion() {
+      const remaining = Math.max(0, state.duration - state.elapsed);
+      const next = state.quizTimes[state.quizIndex];
+      const nextText = next === undefined ? 'クイズはすべて終わりました' : `あと ${Math.max(0, next - state.elapsed)}分（${state.quizIndex + 1}回目）`;
+      const isMembers = state.discussionTab === 'members';
+      return `
+        <div class="p-4 flex-1 flex flex-col gap-3">
+          <div class="retro-window rounded-2xl overflow-hidden">
+            <div class="bg-[#e3f0ff] border-b-2 border-[#6c4d96] px-3 py-1.5 flex items-center justify-between">
+              <span class="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-sky-900"><span class="w-2 h-2 rounded-full bg-sky-500 animate-pulse"></span>話し合い中 ・ 残り ${remaining}分</span>
+              ${windowButtons()}
+            </div>
+            <div class="p-3 bg-gradient-to-r from-[#f3f8ff] to-[#f8f4ff]">
+              <p class="text-[10px] font-bold text-sky-700 mb-0.5">今回のテーマ</p>
+              <h2 class="text-sm font-extrabold">${esc(state.theme || '（未設定）')}</h2>
+            </div>
+          </div>
+
+          ${isMembers ? windowBox(`🐾 参加メンバー（${state.members.length}人）`, `
+              <ul class="space-y-2">${state.members.map(m => `
+                <li class="flex items-center justify-between px-3 py-2.5 rounded-xl bg-[#f7f2ff] border border-[#dfd2f5] text-xs font-bold">
+                  <span>🐾 ${esc(m)}</span><span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">参加中</span>
+                </li>`).join('')}</ul>`)
+            : `
+            <div class="retro-window rounded-2xl overflow-hidden flex-1 flex flex-col">
+              <div class="bg-[#efe6ff] border-b-2 border-[#6c4d96] px-3 py-1.5 flex items-center justify-between">
+                <span class="text-[11px] font-extrabold text-[#4b3170]">📝 議事録</span>
+                <span class="text-[10px] font-bold text-[#7c669e]">${tag('ai')} 自動で記録中</span>
+              </div>
+              <div class="p-3.5 flex-1 flex flex-col">
+                <ul id="minutesList" class="space-y-2 mb-3 flex-1 max-h-[260px] overflow-y-auto">
+                  ${state.minutes.length === 0 ? '<li class="text-xs text-[#7c669e]">話し合いが始まると、ここに記録されます</li>' : ''}
+                  ${state.minutes.map(item => `
+                    <li class="text-xs bg-[#faf7ff] px-3 py-2 rounded-xl border ${item.memo ? 'border-[#f5b4d3]' : 'border-[#e3d7f7]'} leading-relaxed">
+                      ${item.memo ? `<span class="text-[10px] font-bold text-[#9b5c91]">✏️ ${esc(item.who)}のメモ</span><br>` : ''}${esc(item.text)}
+                    </li>`).join('')}
+                </ul>
+                <div class="flex gap-2 pt-2 border-t border-purple-100">
+                  <input id="memoInput" type="text" placeholder="自分で一言メモを追加..." value="${esc(state.newMemo)}" oninput="state.newMemo=this.value"
+                    class="min-w-0 flex-1 px-3 py-2 rounded-xl border-2 border-[#c8b6e6] text-xs bg-white focus:outline-none focus:border-[#6c4d96]" />
+                  <button type="button" onclick="addMemo()" class="retro-pill-btn px-3.5 py-2 rounded-xl text-xs font-bold shrink-0">追加</button>
+                </div>
+              </div>
+            </div>`}
+
+          <div class="retro-window rounded-2xl p-2.5 flex items-center justify-between bg-[#fffdf2]">
+            <div class="flex items-center gap-2">
+              ${faceCatSvg(38, 'happy')}
+              <div><p class="text-[10px] font-bold text-[#8b6bb8]">次のクイズまで</p><p class="text-xs font-extrabold">${nextText}</p></div>
+            </div>
+            ${next === undefined ? '' : `<button type="button" onclick="jumpToQuizTime()" class="retro-pill-btn px-3 py-2 rounded-full text-[11px] font-extrabold shrink-0">（デモ用）時間を進める ›</button>`}
+          </div>
+        </div>`;
+    }
+
+    // =========================================================
+    // ③ クイズの時間です（AIの出題推薦）
+    // =========================================================
+    function renderNotice() {
+      return `
+        <div class="flex-1 flex flex-col items-center justify-center p-5 bg-[#3e285c]/45 backdrop-blur-sm">
+          <div class="retro-window w-full rounded-3xl overflow-hidden">
+            <div class="bg-[#efe6ff] border-b-2 border-[#6c4d96] px-3.5 py-2 flex items-center justify-between">
+              <span class="text-xs font-extrabold text-[#4b3170]">🐾 クイズのお知らせ（${state.quizIndex + 1}回目）</span>${windowButtons()}
+            </div>
+            <div class="p-6 text-center">
+              <div class="relative inline-flex items-center justify-center mb-3 animate-float-cat">
+                <div class="w-20 h-20 rounded-full bg-[#fff3c4] border-2 border-[#6c4d96] flex items-center justify-center shadow-sm">${faceCatSvg(60, 'think')}</div>
+                <span class="absolute -top-1 -right-2 w-7 h-7 rounded-full bg-[#ff9ec7] border-2 border-[#6c4d96] text-white text-xs font-extrabold flex items-center justify-center">？</span>
+              </div>
+              <div class="mb-1">${tag('ai')}</div>
+              <h2 class="text-xl font-extrabold mb-2">💡 クイズの時間です</h2>
+              <p class="text-xs text-[#6c568c] leading-relaxed mb-1 font-bold">AIからの出題のおすすめ</p>
+              <p class="text-xs text-[#3e285c] leading-relaxed mb-5 bg-[#faf7ff] border border-[#e3d7f7] rounded-xl p-3 text-left">${esc(AI_QUIZ.recommend)}</p>
+              <button type="button" onclick="goTo('make')" class="retro-pill-btn w-full py-3 rounded-full font-extrabold text-sm">▶ 問題をつくる</button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // =========================================================
+    // ④ 問題をつくる（AIの案を人間が自由に編集）
+    // =========================================================
+    function renderMake() {
+      const d = state.draft;
+      return `
+        <div class="p-4 flex-1 flex flex-col gap-3">
+          ${windowBox('✏️ 問題をつくる', `
+            <div class="mb-2">${tag('human')}</div>
+            <button type="button" onclick="aiAssist()" class="retro-outline-btn w-full py-2.5 rounded-full text-xs font-extrabold mb-2">🤖 AIに問題文と選択肢を考えてもらう</button>
+            ${state.assisted ? '<p class="text-[11px] text-[#9b5c91] font-bold mb-2">✏️ AIの案を入れました。問題文・選択肢・正解は自由に書き換えられます</p>' : ''}
+            <label class="block text-[11px] font-bold text-[#6c568c] mb-1">問題文</label>
+            <input type="text" value="${esc(d.q)}" oninput="state.draft.q=this.value" placeholder="問題文を入力"
+              class="w-full px-3 py-2 rounded-xl border-2 border-[#c8b6e6] text-sm bg-white focus:outline-none focus:border-[#6c4d96] mb-3" />
+            <label class="block text-[11px] font-bold text-[#6c568c] mb-1">選択肢（正解の左の丸を押す）</label>
+            ${d.opts.map((o, i) => `
+              <div class="flex items-center gap-2 mb-2">
+                <button type="button" onclick="setCorrect(${i})" class="w-7 h-7 rounded-full border-2 border-[#6c4d96] shrink-0 flex items-center justify-center text-xs font-extrabold ${d.correct === i ? 'bg-[#5a3a8a] text-white' : 'bg-white text-[#5a3a8a]'}">${d.correct === i ? '✓' : ['A', 'B', 'C'][i]}</button>
+                <input type="text" value="${esc(o)}" oninput="state.draft.opts[${i}]=this.value" placeholder="選択肢${i + 1}"
+                  class="min-w-0 flex-1 px-3 py-2 rounded-xl border-2 border-[#c8b6e6] text-sm bg-white focus:outline-none focus:border-[#6c4d96]" />
+              </div>`).join('')}
+          `)}
+          <button type="button" onclick="sendQuiz()" class="retro-pill-btn w-full py-3 rounded-full font-extrabold text-sm mt-auto">この内容で全員に出題する ›</button>
+        </div>`;
+    }
+
+    // =========================================================
+    // ⑤ 回答＆自信度（匿名・自信度はほかの人に見せない）
+    // =========================================================
+    function renderQuiz() {
+      const can = state.myAnswer !== null && state.myConf !== null;
+      const extra = [['notyet', 'まだ理解できていない'], ['odd', '少し違和感がある']];
+      return `
+        <div class="p-4 flex-1 flex flex-col gap-3">
+          <div class="retro-window rounded-2xl overflow-hidden">
+            <div class="bg-[#fff4cc] border-b-2 border-[#6c4d96] px-3 py-1.5 flex items-center justify-between">
+              <span class="text-[11px] font-extrabold text-[#6b4e00]">🐾 Q${state.quizIndex + 1} ・ 回答は匿名で集計されます</span>${windowButtons()}
+            </div>
+            <div class="p-3.5 bg-[#fffdf5] flex items-center justify-between gap-2">
+              <div><p class="text-[11px] font-bold text-[#9c7820] mb-0.5">理解度チェック</p><h2 class="text-base font-extrabold">${esc(state.quiz.q)}</h2></div>
+              ${faceCatSvg(46, 'think')}
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            ${state.quiz.opts.map((c, i) => {
+              const sel = state.myAnswer === String(i);
+              return `
+                <button type="button" onclick="pickAnswer('${i}')" class="w-full flex items-center justify-between px-4 py-3 rounded-2xl border-2 text-left ${sel ? 'bg-[#ffe89e] border-[#5a3a8a] font-extrabold shadow-[0_3px_0_#5a3a8a]' : 'bg-white border-[#c8b6e6] font-bold'}">
+                  <span class="flex items-center gap-3">
+                    <span class="w-7 h-7 rounded-full border-2 border-[#6c4d96] flex items-center justify-center text-xs font-extrabold shrink-0 ${sel ? 'bg-[#5a3a8a] text-white' : 'bg-[#f6f1ff] text-[#5a3a8a]'}">${['A', 'B', 'C'][i]}</span>
+                    <span class="text-sm">${esc(c)}</span>
+                  </span>${sel ? '<span class="text-sm">🐾</span>' : ''}
+                </button>`;
+            }).join('')}
+            <div class="grid grid-cols-2 gap-2">
+              ${extra.map(([v, label]) => `
+                <button type="button" onclick="pickAnswer('${v}')" class="py-2.5 rounded-2xl border-2 text-xs font-bold ${state.myAnswer === v ? 'bg-[#ffe89e] border-[#5a3a8a]' : 'bg-white border-[#c8b6e6]'}">${label}</button>`).join('')}
+            </div>
+          </div>
+
+          <div class="retro-window rounded-2xl p-3.5">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-extrabold">自分の回答の自信度 🐾</span>
+              <span class="text-[10px] font-bold text-[#7c669e]">1: 自信なし 〜 5: 自信あり</span>
+            </div>
+            <div class="grid grid-cols-5 gap-2">
+              ${[1, 2, 3, 4, 5].map(lv => `
+                <button type="button" onclick="pickConf(${lv})" class="py-2 rounded-xl text-sm font-extrabold border-2 ${state.myConf === lv ? 'bg-[#9b6ee8] text-white border-[#5a3a8a]' : 'bg-[#faf7ff] text-[#5a3a8a] border-[#d3c1f0]'}">${lv}</button>`).join('')}
+            </div>
+            <p class="text-[10px] text-[#7c669e] mt-2">🔒 自信度はほかの人には表示されません</p>
+          </div>
+
+          <button type="button" onclick="submitAnswer()" ${can ? '' : 'disabled'} class="retro-pill-btn mt-auto w-full py-3.5 rounded-full font-extrabold text-sm">回答する ›</button>
+        </div>`;
+    }
+
+    // =========================================================
+    // ⑥ 結果（匿名。答えごとの人数と、そろったか／ズレているか）
+    // =========================================================
+    function renderResult() {
+      const keys = ['0', '1', '2', 'notyet', 'odd'];
+      const labels = [...state.quiz.opts.map((o, i) => `${['A', 'B', 'C'][i]}：${o}`), 'まだ理解できていない', '少し違和感がある'];
+      const counts = keys.map(k => state.answers.filter(a => a.v === k).length);
+      const max = Math.max(...counts, 1);
+      const allOk = state.answers.every(a => a.v === String(state.quiz.correct));
+      return `
+        <div class="p-4 flex-1 flex flex-col gap-3">
+          ${windowBox('🐾 結果発表（匿名）', `
+            <div class="flex items-center justify-between">
+              <p class="text-lg font-extrabold ${allOk ? 'text-emerald-700' : 'text-[#c66d91]'}">${allOk ? 'みんなの理解がそろいました！' : '理解がズレています'}</p>
+              <div class="animate-float-cat">${faceCatSvg(52, allOk ? 'happy' : 'think')}</div>
+            </div>
+          `)}
+          ${windowBox(`回答の内訳（全${state.answers.length}人）`, `
+            <div class="space-y-3">
+              ${keys.map((k, i) => {
+                const isCorrect = k === String(state.quiz.correct);
+                return `
+                  <div>
+                    <div class="flex items-center justify-between text-xs font-bold mb-1">
+                      <span class="flex items-center gap-1.5">${esc(labels[i])}${isCorrect ? '<span class="px-2 py-0.5 text-[10px] bg-emerald-100 text-emerald-800 rounded-full border border-emerald-300">正解 🐾</span>' : ''}</span>
+                      <span class="text-[#6c568c]">${counts[i]}人</span>
+                    </div>
+                    <div class="w-full h-3 bg-[#f1eaff] rounded-full overflow-hidden border border-[#d8c7f2]">
+                      <div class="h-full rounded-full ${isCorrect ? 'bg-[#74d6a8]' : 'bg-[#b79ee0]'}" style="width:${counts[i] / max * 100}%"></div>
+                    </div>
+                  </div>`;
+              }).join('')}
+            </div>
+          `)}
+          ${allOk
+            ? `<button type="button" onclick="backToDiscussion()" class="retro-pill-btn w-full py-3.5 rounded-full font-extrabold text-sm mt-auto">話し合いに戻る ›</button>`
+            : `<button type="button" onclick="goTo('roulette')" class="retro-pill-btn w-full py-3.5 rounded-full font-extrabold text-sm mt-auto">🐾 ルーレットで説明する人を決める ›</button>`}
+        </div>`;
+    }
+
+    // =========================================================
+    // ⑦ ルーレット（見た目は全員平等。実際は自信度4以上の人だけが当たる）
+    // =========================================================
+    function renderRoulette() {
+      const names = state.answers.map(a => a.name);
+      const n = names.length;
+      const colors = ['#ffd8e3', '#dce8ff', '#fff2cc', '#ffd2eb', '#e8d8ff', '#d6f5e8'];
+      const cx = 120, cy = 120, r = 112;
+      const slices = names.map((name, i) => {
+        const a1 = (i * 360 / n) - 90 - (180 / n), a2 = ((i + 1) * 360 / n) - 90 - (180 / n);
+        const p = a => [cx + r * Math.cos(a * Math.PI / 180), cy + r * Math.sin(a * Math.PI / 180)];
+        const [x1, y1] = p(a1), [x2, y2] = p(a2);
+        const mid = (a1 + a2) / 2 * Math.PI / 180;
+        return `<path d="M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2} Z" fill="${colors[i % colors.length]}" stroke="#9a7ac9" stroke-width="1.5"/>
+          <text x="${cx + r * 0.62 * Math.cos(mid)}" y="${cy + r * 0.62 * Math.sin(mid)}" text-anchor="middle" dominant-baseline="middle" fill="#3e285c" font-size="13" font-weight="800">${esc(name.slice(0, 5))}</text>`;
+      }).join('');
+
+      return `
+        <div class="p-3.5 flex-1 flex flex-col">
+          <div class="flex items-center justify-between mb-2 px-1">
+            <span class="text-sm font-extrabold">ルーレット</span>${cloudSvg(34)}
+          </div>
+          <div class="retro-window rounded-2xl overflow-hidden flex flex-col">
+            <div class="bg-[#efe6ff] border-b-2 border-[#6c4d96] px-3 py-1.5 flex items-center justify-between">
+              <span class="text-[11px] font-bold text-[#5a3a8a]">🐾 ねこちゃんルーレット ${tag('ai')}</span>${windowButtons()}
+            </div>
+            <div class="p-3.5 flex flex-col items-center">
+              <div class="w-full px-3 py-1.5 rounded-full border-2 border-[#9a7ac9] bg-[#f8f3ff] flex items-center justify-center gap-2 mb-1">
+                <span class="text-sm">🎡</span><span class="text-xs sm:text-sm font-extrabold">だれが代わりに説明する？</span>
+              </div>
+              <div class="w-full flex items-end justify-between px-3 -mb-4 z-20 pointer-events-none">
+                <div class="animate-float-cat">${jumpingRibbonCatSvg(96)}</div><div class="pb-1">${tinyMouseSvg(42)}</div>
+              </div>
+              <div class="relative w-[214px] h-[214px] flex items-center justify-center">
+                <div class="absolute -top-2.5 left-1/2 -translate-x-1/2 z-20">
+                  <div class="w-7 h-7 bg-[#ffd6ea] border-2 border-[#5a3a8a] rounded-t-lg rounded-b-full flex items-center justify-center text-[11px]">♡</div>
+                </div>
+                <div id="wheel" class="w-[206px] h-[206px] rounded-full border-[3px] border-[#5a3a8a] shadow-md overflow-hidden wheel-transition" style="transform:rotate(${state.rouletteRotation}deg)">
+                  <svg viewBox="0 0 240 240" class="w-full h-full">${slices}</svg>
+                </div>
+                <div class="absolute w-11 h-11 rounded-full bg-white border-2 border-[#5a3a8a] flex items-center justify-center text-lg z-10">🐾</div>
+              </div>
+              <button type="button" onclick="spinRoulette()" ${state.rouletteSpinning || state.rouletteDone ? 'disabled' : ''} class="retro-pill-btn w-4/5 py-2.5 rounded-full font-extrabold text-sm mt-2.5 mb-2.5">▶ ${state.rouletteSpinning ? '抽選中...' : '回す'}</button>
+              ${state.rouletteDone ? `
+                <div class="w-full relative border-2 border-[#b79ee0] rounded-2xl px-4 py-2.5 bg-[#fdfaff] text-center">
+                  <span class="absolute -top-2.5 left-3 px-2.5 py-0.5 rounded-full bg-[#8f63d8] text-white text-[10px] font-extrabold">結果</span>
+                  <p class="text-sm font-extrabold"><span class="inline-block px-2.5 py-0.5 rounded-lg bg-[#ffdbe9] mr-1">${esc(state.winner)}</span>が当たりました！</p>
+                </div>` : ''}
+            </div>
+          </div>
+          ${state.rouletteDone ? `
+            <div class="retro-window rounded-2xl p-3.5 mt-3">
+              <div class="mb-1.5">${tag('human')}</div>
+              <p class="text-sm font-extrabold mb-3">${esc(state.winner)}が代わりに説明してね</p>
+              <button type="button" onclick="backToDiscussion()" class="retro-pill-btn w-full py-3 rounded-full font-extrabold text-sm mb-2">わかった！話し合いに戻る</button>
+              <button type="button" onclick="goTo('ai')" class="retro-outline-btn w-full py-2.5 rounded-full font-extrabold text-xs">それでも分からないよ！</button>
+            </div>` : ''}
+        </div>`;
+    }
+
+    // =========================================================
+    // ⑧ AIからみた説明（押した本人だけに表示）
+    // =========================================================
+    function renderAI() {
+      return `
+        <div class="p-4 flex-1 flex flex-col gap-3">
+          <div class="retro-window rounded-2xl overflow-hidden flex-1 flex flex-col">
+            <div class="bg-[#d7f7e7] border-b-2 border-[#6c4d96] px-3 py-1.5 flex items-center justify-between">
+              <span class="text-[11px] font-extrabold text-emerald-900">🐾 ねこ先生のAI解説</span>${windowButtons()}
+            </div>
+            <div class="p-4 flex-1 flex flex-col">
+              <div class="flex items-center justify-between mb-3">
+                <div class="flex flex-col gap-1">${tag('ai')}<span class="text-[10px] font-bold text-[#7c669e]">🔒 あなただけに表示されています</span></div>
+                ${faceCatSvg(48, 'happy')}
+              </div>
+              <div class="inline-block self-start px-3 py-1 rounded-full bg-[#d7f7e7] border border-emerald-400 text-emerald-900 text-xs font-extrabold mb-3">
+                正解：${['A', 'B', 'C'][state.quiz.correct]}（${esc(state.quiz.opts[state.quiz.correct])}）
+              </div>
+              <div class="rounded-2xl p-3.5 bg-[#f2fcf7] border-2 border-[#a8e6c7] text-xs text-[#2b4d3e] leading-relaxed">
+                <p class="font-extrabold text-emerald-900 mb-1">💡 かんたんな説明</p>
+                <p>${esc(AI_QUIZ.explain)}</p>
+              </div>
+              <div class="mt-auto flex justify-end pt-3 animate-float-cat">${loungingCatSvg(86)}</div>
+            </div>
+          </div>
+          <button type="button" onclick="backToDiscussion()" class="retro-pill-btn w-full py-3.5 rounded-full font-extrabold text-sm">理解した（話し合いに戻る）</button>
+        </div>`;
+    }
+
+    // =========================================================
+    // 画面の描き直し
+    // =========================================================
+    const RENDERERS = { home: renderHome, create: renderCreate, join: renderJoin, lobby: renderLobby, discussion: renderDiscussion,
+                        notice: renderNotice, make: renderMake, quiz: renderQuiz, result: renderResult, roulette: renderRoulette, ai: renderAI };
+
+    function render() {
+      let html = RENDERERS[state.screen]();
+      if (state.toast) html += `<div class="fixed top-3 left-1/2 -translate-x-1/2 z-30 bg-[#3e285c] text-white text-xs font-bold px-4 py-2 rounded-full shadow-lg whitespace-nowrap">${esc(state.toast)}</div>`;
+      document.getElementById('screenContainer').innerHTML = html;
+      const footer = document.getElementById('bottomNav');
+      footer.classList.toggle('hidden', state.screen !== 'discussion');
+      footer.querySelectorAll('.bottom-tab').forEach(btn => {
+        const on = btn.dataset.nav === state.discussionTab;
+        btn.className = `bottom-tab flex flex-col items-center justify-center py-1.5 rounded-2xl text-xs font-bold ${on ? 'bg-[#ede4ff] text-[#4b3170] border border-[#b79ee0]' : 'text-[#7c669e]'}`;
+      });
+      const list = document.getElementById('minutesList');
+      if (list) list.scrollTop = list.scrollHeight;
+    }
+
+    function goTo(screen) { state.screen = screen; render(); window.scrollTo(0, 0); }
+
+    function showToast(msg) {
+      state.toast = msg; render();
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { state.toast = ''; render(); }, 2200);
+    }
+
+    // =========================================================
+    // ルーム（※今はデモ。Firebaseにつなぐときはここを置き換える）
+    // =========================================================
+    function setDuration(min) { state.duration = Math.max(5, min || 60); render(); }
+
+    function makeRoomCode() {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // 読み間違えやすい O/0/I/1 は使わない
+      return Array.from({ length: 5 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    }
+
+    function enterLobby() {
+      state.quizTimes = makeQuizTimes(state.duration);
+      state.members = [state.myName];
+      goTo('lobby');
+      // デモ：ほかのメンバーが少しずつ入ってくる
+      DEMO_OTHERS.forEach((name, i) => setTimeout(() => {
+        if (state.screen === 'lobby' && !state.members.includes(name)) { state.members.push(name); render(); }
+      }, 600 * (i + 1)));
+    }
+
+    function createRoom() {
+      if (!state.myName.trim()) { showToast('名前を入力してね'); return; }
+      state.isHost = true;
+      state.roomCode = makeRoomCode();
+      enterLobby();
+    }
+
+    function joinRoom() {
+      if (!state.joinCode.trim() || !state.myName.trim()) { showToast('コードと名前を入力してね'); return; }
+      state.isHost = false;
+      state.roomCode = state.joinCode.trim();
+      if (!state.theme) state.theme = '文化祭の出し物を決める';
+      enterLobby();
+    }
+
+    function startDiscussion() {
+      DEMO_OTHERS.forEach(n => { if (!state.members.includes(n)) state.members.push(n); });
+      state.elapsed = 0; state.quizIndex = 0; state.minutes = [];
+      goTo('discussion');
+      // デモ：議事録が自動で増えていく（本番は音声の文字起こし＋AI）
+      let i = 0;
+      clearInterval(logTimer);
+      logTimer = setInterval(() => {
+        if (i >= DEMO_LOG.length) { clearInterval(logTimer); return; }
+        state.minutes.push({ text: DEMO_LOG[i++], memo: false });
+        if (state.screen === 'discussion') render();
+      }, 1200);
+    }
+
+    function addMemo() {
+      const text = state.newMemo.trim();
+      if (!text) return;
+      state.minutes.push({ text, memo: true, who: state.myName });
+      state.newMemo = '';
+      render();
+    }
+
+    function jumpToQuizTime() {
+      const next = state.quizTimes[state.quizIndex];
+      if (next === undefined) return;
+      state.elapsed = next;
+      state.draft = { q: '', opts: ['', '', ''], correct: null };
+      state.assisted = false;
+      goTo('notice');
+    }
+
+    // =========================================================
+    // 問題づくり（※AIアシストは今はデモ。Geminiにつなぐときはここを置き換える）
+    // =========================================================
+    function aiAssist() {
+      state.draft = { q: AI_QUIZ.q, opts: [...AI_QUIZ.opts], correct: AI_QUIZ.correct };
+      state.assisted = true;
+      render();
+    }
+    function setCorrect(i) { state.draft.correct = i; render(); }
+
+    function sendQuiz() {
+      const d = state.draft;
+      if (!d.q.trim() || d.opts.some(o => !o.trim()) || d.correct === null) { showToast('問題文・選択肢・正解を入力してね'); return; }
+      state.quiz = { q: d.q.trim(), opts: d.opts.map(o => o.trim()), correct: d.correct };
+      state.myAnswer = null; state.myConf = null;
+      goTo('quiz');
+    }
+
+    // =========================================================
+    // 回答
+    // =========================================================
+    function pickAnswer(v) { state.myAnswer = v; render(); }
+    function pickConf(lv) { state.myConf = lv; render(); }
+
+    function submitAnswer() {
+      const c = String(state.quiz.correct);
+      const wrong = String((state.quiz.correct + 1) % 3);
+      // デモ：ほかのメンバーの回答（本番はFirebaseで全員の回答を集める）
+      const demo = [
+        { v: c, conf: 5 }, { v: c, conf: 4 }, { v: wrong, conf: 2 }, { v: 'notyet', conf: 1 }
+      ];
+      state.answers = DEMO_OTHERS.map((name, i) => ({ name, ...demo[i % demo.length] }));
+      state.answers.push({ name: state.myName, v: state.myAnswer, conf: state.myConf });
+      state.rouletteDone = false; state.rouletteSpinning = false; state.rouletteRotation = 0;
+      goTo('result');
+    }
+
+    // =========================================================
+    // ルーレット
+    // =========================================================
+    function spinRoulette() {
+      if (state.rouletteSpinning || state.rouletteDone) return;
+      const n = state.answers.length;
+      // 自信度4以上の人の中から選ぶ（いなければ、いちばん自信度が高い人の中から）
+      let pool = state.answers.map((a, i) => ({ ...a, i })).filter(a => a.conf >= 4);
+      if (pool.length === 0) {
+        const max = Math.max(...state.answers.map(a => a.conf));
+        pool = state.answers.map((a, i) => ({ ...a, i })).filter(a => a.conf === max);
+      }
+      const hit = pool[Math.floor(Math.random() * pool.length)];
+      const slice = 360 / n;
+      const wobble = (Math.random() - 0.5) * slice * 0.6;   // 枠の真ん中ぴったりで止まらないように少しずらす
+      const target = 360 * 5 + (360 - hit.i * slice) + wobble;
+      state.rouletteSpinning = true;
+      render();   // まず「抽選中」にして、盤は今の角度のまま描く
+      // 描き直したあとの盤に、次のコマで回転をかける（こうしないと回るアニメーションが出ない）
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const wheel = document.getElementById('wheel');
+        if (wheel) wheel.style.transform = `rotate(${target}deg)`;
+      }));
+      clearTimeout(spinTimer);
+      spinTimer = setTimeout(() => {
+        state.rouletteRotation = target;
+        state.rouletteSpinning = false; state.rouletteDone = true; state.winner = hit.name;
+        render();
+      }, 3300);
+    }
+
+    function backToDiscussion() {
+      state.quizIndex++;
+      state.discussionTab = 'minutes';
+      goTo('discussion');
+    }
+
+    document.getElementById('bottomNav').addEventListener('click', e => {
+      const btn = e.target.closest('.bottom-tab');
+      if (!btn) return;
+      const t = btn.dataset.nav;
+      if (t === 'quiz') { jumpToQuizTime(); return; }
+      state.discussionTab = t;
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
